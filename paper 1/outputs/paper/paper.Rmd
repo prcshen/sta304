@@ -1,0 +1,125 @@
+---
+title: "Speed limit: more emphasis should be put on"
+author: Wenxuan Li
+thanks: "Code and data are available at: https://github.com/leoli2022/sta304."
+date: "`r format(Sys.time(), '%d %B %Y')`"
+abstract: "Speed limit is important to the security of drivers and passengers in the road. However, recent drivers do not pay enough attention to the speed limit. A data set, 'About Mobile Watch Your Speed Program – Speed Summary' is adopted to see the status that the drivers care about the limit. The result is not positive and we appeal for more emphasis on the importance of speed limit."
+output:
+  bookdown::pdf_document2
+toc: FALSE
+bibliography: references.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,message = FALSE, warning=FALSE)
+library(tidyverse)
+library(opendatatoronto)
+library(dplyr)
+library(knitr)
+```
+
+
+```{r}
+# get package
+package <- show_package("058236d2-d26e-4622-9665-941b9e7a5229")
+# get all resources for this package
+resources <- list_package_resources("058236d2-d26e-4622-9665-941b9e7a5229")
+
+# identify datastore resources; by default, Toronto Open Data sets datastore resource format to CSV for non-geospatial and GeoJSON for geospatial resources
+datastore_resources <- filter(resources, tolower(format) %in% c('csv', 'geojson'))
+
+# load the first datastore resource as a sample
+data <- filter(datastore_resources, row_number()==1) %>% get_resource()
+```
+
+
+# Introduction
+
+Speed limit is widely adopted in every corner of the world because it can greatly reduce the accidents in the road. However, the awareness of the importance for the speed limit may not catch enough attention from the drivers, which may bring seriously results. In this report, we will utilize a data set which records the vehicles' speed in the road of the City of Toronto @dataset to see if the government should emphasize more on the speed limit's importance. We focus on the median (i.e., 50\%) of the speed since it represents the common speed. In the meantime, we are also curious whether the volume will influence the speed or not. Summary statistics and histograms are adopted as tools to analyze the data set. 
+
+In the following context, Section \@ref(data-source-and-collection) provides the source of data, including the collection procedure. Section \@ref(data-bias) talks about the possible bias issues in the process of data collection. Section \@ref(data-summary) presents the numerical summary of the data set, and section \@ref(observations-and-discussion) investigates the data set via graphs.
+
+# Data
+
+In this section, we will summarize the data set we adopt thouroughly, including the source, collection methods, bias, numerical summary, graphical summary, and observations. Note that, we run our analysis in `R` [@citeR] and generates the report in `Rstudio`[@rstudio]. We also use the `tidyverse` and `dplyr` for data management, which was written by @tidyverse and @dplyr; `opendatatoronto` for data retrieval directly from the Internet, which was written by @opendatatoronto; and `knitr` for table generation, which was written by @knitr.
+
+## Data source and collection
+
+The data set we adopt in this report is "About Mobile Watch Your Speed Program – Speed Summary", which is retrieved from Open Data Toronto @dataset. As its name indicates, this data set is a summary of the data from a special program, called as "About Mobile Watch Your Speed Program". This program sets up devices (i.e., a radar device for speed measurement and a LED display for speed displaying) on the hydro pole or the streetlight to measure the speed of the passing vehicles to remind the drivers that they may exceed the speed limit. Though this program is supported by the government, the number of the device is still limited. Thus, they need to rotate their devices from spots to spots each month. Another thing we need to emphasize is that for the radar does not work 24 hours a day and 7 days a week, but only weekdays from 7 am to 9 pm.
+
+According to the data collection procedure, we can see that the population is all roads in the city of Toronto; the frame population is the roads that have a hydro pole or a streetlight that can hold the radar and the LED display; and the sample population is the road that being selected to install the device set. The website does not mention how they select the spot to install the device set, but they are in a rotating scheme, which indicates that they are trying to install the device on each possible spot to collect data. Since people can install the device anywhere they want if applicable, there is no "non-response" problem. 
+
+As for the feature of the data set, the strength of the data set centers on its detailed summary on the speed data they collected. They provide the summary from two aspects -- 1) the quantile of speeds; and 2) the number of vehicles recorded between a given small intervals (i.e., interval width = 5km/h). The weakness centers on the bias discussed as below.
+
+## Data bias
+
+The bias of the data set is summarized as below. The first is the bias on the time and space. As indicated in the collection process that for each time period, only a proportion of the roads have records, which means that the record is not comprehensive from time and space, which may cause bias because the sampled raods and the sampled time periods, might not be representation. For example, the device only works on weekdays from 7 am to 8 pm, the remaining time periods have no records and they cannot be represented by the given time periods. The second thing is that when drivers see such an LED display far away (i.e., out of radar measuring range), they might be reminded and slow their speed if they exceed the limit speed, which may cause the recorded speed consistently smaller than the actual one.
+
+
+## Data summary
+
+In the original data set, it contains 7528 pieces of samples and 52 variables for each sample. These 52 variables can be roughly divided into four categories.
+
+- Identifiers. In this category, we have the sample id, the road id, ward number, locations, road names, direction, install data, removal date, recording time period, etc. These identifiers can help us locate the sample from both time and space aspects. They are all category variables.
+
+- Speed variables. In this category, for each given recording spot and time period, the data set given the speeds of different percentile (i.e., 5\%,10\%,...,95\%) and the number of vehicles recorded in each speed interval (i.e., 0-5 km/h,5-10 km/h,...,95-100 km/h, 100+km/h). Variables in this category are numerical variables.
+
+- Volume. This volume does not represent the volume of the given road, but the total number of vehicles recorded in the given period. However, since this the recording time period is similar across different spots, we can still treat it as a "volume". This is a numerical variable.
+
+We will not use all of these variables in the further analysis. Instead, to check the vehicles' speed in the city of Toronto, we clean the data set and select \& create several variables of interest. These variables include the median speed, which is the 50\% percentile of the recorded speed values and can be directly retrieved from the original data set; the proportion of the vehicles exceeds 40 km/h (i.e., the most common speed limit), which is summation of the number of vehicles in the speed intervals from 40-45 km/h to over 100 km/h divided by the volume; the proportion of the vehicles exceeding 100 km/h, which is computed by the number of vehicles exceeding 100 km/h divided by the volume; and the volume, which is changed to a categorical variable with five levels (i.e., 0~10000, 10001~30000, 30001~60000, 60001~80000, >80001). 
+
+```{r}
+data_proc <- data %>%
+  mutate(speed_median = as.numeric(pct_50),
+         speed_over40 = (as.numeric(spd_40)+as.numeric(spd_45)+as.numeric(spd_50)+as.numeric(spd_55)+as.numeric(spd_60)+as.numeric(spd_65)+as.numeric(spd_70)+as.numeric(spd_75)+as.numeric(spd_80)+as.numeric(spd_85)+as.numeric(spd_90)+as.numeric(spd_95)+as.numeric(spd_100_and_above))/as.numeric(volume),
+         speed_over100 = as.numeric(spd_100_and_above)/as.numeric(volume),
+         volume = as.factor(case_when(as.numeric(volume)<=10000 ~1,
+                            as.numeric(volume)<=30000 ~2,
+                            as.numeric(volume)<=60000 ~3,
+                            as.numeric(volume)<=80000 ~4,
+                            as.numeric(volume)>80000 ~5))) %>%
+  select(speed_median,speed_over40,speed_over100,volume)
+```
+
+```{r tab1}
+speed_median_sum <- summary(data_proc$speed_median)
+speed_over40_sum <- summary(data_proc$speed_over40)
+speed_over100_sum <- summary(data_proc$speed_over100)
+data_sum <- data.frame(cbind(speed_median_sum,speed_over40_sum,speed_over100_sum))
+colnames(data_sum) <- c("Median","Over 40 km/h","Over 100 km/h")
+rownames(data_sum) <- c("Minimum","1st quantile","Median","Mean","3rd quantile","Maximum")
+kable(data_sum,caption="Summary statistics for variable of interest")
+```
+
+Table \@ref(tab:tab1) shows the summary of statistics for the variable of interests. From the table, we can observe that the speed limit is high violated by most vehicle drivers. From the median of vehicle speeds, the minimum is only 5 km/h, but the maximum can achieve 80 km/h, which is much faster than the speed limit. Fortunately, till the third quantile, the median speed is only 30 km/h. For the proportion of vehicles whose speeds are over 40 km/h, the median value is around 20\%, but the maximum value is 1, which is out of expectation. For the proportion of vehicles whose speeds are over 100 km/h, the median value is 0 (which is perfect), but the maximum value is around 40\%. According to these observations, we can see that the speed limit, on some roads, are fully ignored.
+
+## Observations and discussion
+
+In this section, we visualize the data to provide a straightforward understanding of vehicles' speeds. Figure \@ref(fig:fig1) is the histogram for the median of speed. From the figure, we can see that most medians are all smaller than 40 km/h, only around 20\% medians are larger than 40 km/h. This again indicates that on around 20\% roads that drivers do not care about speed limits.
+
+```{r fig1, fig.cap="Medians of vehicles limits"}
+ggplot(data_proc, aes(x=speed_median)) + geom_histogram() + geom_histogram(binwidth=1)
+```
+
+Figure \@ref(fig:fig2) shows the histogram of the proportion of vehicles that exceeds 40 km/h for different volume categories. Different colors represent different volume level. The red one yields for the smallest volume (i.e., 0~10000), and the pink one represents the highest volume (i.e., >80000). From the figure, we observe that the first three volume levels (i.e., 0~10000, 10001~30000, and 30001~60000) has an obvious decreasing trend on the number of spots whose vehicles exceed 40 km/h as the proportion increases. But for the remaining volume levels, the count of spots does not greatly vary with proportion of vehicles that exceed 40 km/h. This observation indicates that the busier the road is, the less the driver will pay attention to the speed limit. This is quite out of my expectation.
+
+```{r fig2, fig.cap="Proportion of vehicles that exceed 40 km/h"}
+ggplot(data_proc, aes(x=speed_over40, color=volume)) +
+  geom_histogram(fill="white")
+```
+
+Figure \@ref(fig:fig3) shows the histogram of the proportion of vehicles that exceeds 100 km/h for different volume levels. Unlike \@ref(fig:fig2), this figure shows that only the latter two volume levels have proportion obviously larger than 0. Especially for the level 5, whose proportion can even exceed 0.4.
+
+```{r fig3, fig.cap="Proportion of vehicles that exceed 100 km/h"}
+ggplot(data_proc, aes(x=speed_over100, color=volume)) +
+  geom_histogram(fill="white")
+```
+
+From these figures, we observed two things: 1) in some roads, no vehicle pays attention to the speed limit, which means we may need to emphasize more on the important of the speed limit; 2) vehicles in roads with higher volume tend to pay less attention on the speed limit and tend to drive on the highest possible speed. The latter observation is quite interesting, and we may need to explore more to find the answer of this question.
+
+\newpage
+
+
+# References
+
+
