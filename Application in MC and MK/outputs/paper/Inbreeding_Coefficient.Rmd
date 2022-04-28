@@ -1,0 +1,832 @@
+---
+title: "Application of Markov Chains and MC chains"
+subtitle: "Inbreeding Coefficient estimator"
+author: 
+  - Wenxuan Li
+date: "April 27, 2022"
+thanks: 'Code and data are available at: https://github.com/leoli2022/sta304'
+abstract: "The Hardy-Weinberg Equilibrium is critical in human genetics approaches. It states that allele and genotype frequencies remain constant throughout generations and that there should be a straightforward link between the two types of frequencies in a large random-mating population in the absence of selection, mutation, and migration. When the selection assumption is broken, the inbreeding model is utilized to determine if the HW equilibrium has been disturbed. Numerous approaches for calculating the inbreeding coefficient have been proposed, but none have proven state-of-the-art performance due to the challenges associated with solving complicated integrals. As a result, we offer an upgrade to the present techniques for estimating inbreeding coefficients in this study by incorporating the Markov Chain Monte Carlo as an integration approximator. The experiment results indicate that for both high-dimensional and low-dimensional data, the Metropolis-Hastings-within-Gibbs strategy outperformed all other MCMC approaches."
+output: 
+  pdf_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+---
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE,include=FALSE}
+#Package requirements
+library(kableExtra)
+library(ggplot2)
+library(tidyverse)
+```
+
+\newpage
+# Introduction
+All works are contributed by Karen L Ayres & David J Balding's work. In the article "Measuring departures from Hardy–Weinberg: a Markov chain Monte Carlo method for estimating the inbreeding coefficient". By using R (R Core team, 2020), tidymodels (Kuhn and Wickham, 2020), kableExtra (Zhu, 2021) packages, we are able to clean and analysysed the data from .
+
+The Hardy-Weinberg(HW) Equilibrium asserts that in a large random-mating population, assuming no selection, mutation, or migration, allele and genotype frequencies remain constant from generation to generation, and there is a straightforward relationship between genotype and allele frequencies (Hardy HG, 1908). This is essential because several techniques in human genetics are predicated on the existence of Hardy-Weinberg Equilibrium. Specifically, the frequencies of the two alleles (A or B) at a bi-allelic marker are p and q, where p = 1.
+
+However, the assumptions are often broken in actuality, and to evaluate the deviation from Hardy Weinberg Equilibrium, we may simply compute the anticipated genotype frequencies and compare them to the observed ones using the chi-squared test. 
+Conversely, a variety of approaches have been developed for estimating f, a parameter that quantifies the deviation from HW induced by inbreeding. And Ayres and Balding explain why such strategies are inadequate (Ayres, 1988).
+
+If inbreeding (i.e. selection) is the main violation of HW assumptions, causing variation from HW, the inbreeding model may be appropriate( Malecot, G., 1969), where $p_{ij}$, the relative frequency of the geno-type $AiAj$ is: $$p_{ii} =p_i(f+(1-f)p_i) \tag{1}$$
+$$p_{ij} =2p_ip_j(1-f)\tag{1}$$ where pi is the frequency of allele $A_i$, and f is the inbreeding coefficient.Equation one yields the HW proportions for f = 0. When f equals 1, heterozygotes never form. The value of f may be negative, but it is constrained below by the condition that the population frequencies of each homozygote be positive, resulting in: $$f\ge\left(\frac{-p_{min}}{1-p_{min}} \right)\tag{2}$$ where $p_{min}$ is the smallest frequency (Ayres, 1988).
+
+f may be read in certain models of population subdivision as the probability that an individual's two genes are identical by descent (Crow, J. F, 1970), in which case it is restricted to be non-negative. Nei Chesser(Nei, M., 1983) and Robertson Hill (Robertson, A., 1984) presented point estimators for the inbreeding coefficient, however, these estimators do not explicitly account for inbreeding and may produce values that contradict the limit (Ayres, K., 1998) in the multi-allelic situation.
+
+Ayres Balding (Ayres, K., 1998) introduced the maximum likelihood estimator, which adheres to the inbreeding model's limit. Assuming a random sample of genotypes, the probability is as follows: $$P(n_{ij}|f,p_1,\dots,p_k)=C_1\prod_{i=1}^k(p_i(f +(1-f)p_i)^{n_{ii}}\prod_{j=i+1}^k(2p_ip_j(1-f))^{n_{ij}}\tag{3}$$ where C1 is a constant. For k = 2, equation three is readily maximized (Weir, B. S., 1998) to obtain
+$$\hat{f}_{mle}=1-\left(\frac{2n_{12}n}{(2n_{11}+n_{12})(n_{12}+2n_{22})} \right)\tag{4}$$
+For k > 2, it is not possible to maximise the likelihood analytically, but numerical approaches (Ayres, K., 1998) and the EM algorithm (Hill, W. G.., 1995) may be used. 
+The likelihood function derived by making all other parameters equal to their MLE value (i.e. $p'_is$) offers a measure of the support provided by the data for various potential values of f, but it ignores uncertainty in the $p_i$ (Ayres, K., 1998). While integration across the joint distribution of $p_i$ may be used to determine the marginal probability of f, accurate integration may be impractical, and we can estimate the integration using Markov Chain Monte Carlo (MCMC) techniques.
+
+\newpage
+
+# Data
+
+## Data Models
+
+### Dataset 1: Biallelic Site
+When a given locus in a genome has two reported alleles, this site is referred to be a biallelic site, with k equal to two in our research. If the inbreeding coefficient, f, in our observed sample is 0.05 and our sample contains 200 individuals with an allele frequency of $p_1 = 0.25$ and $p_2 = 0.75$, the genotype frequencies may be simulated using equation (1). Then, using our observed data, we calculate the phenotypic frequencies as $n_ij = ntimes p_ij$. However, since this simulation often produces non-integer phenotypic frequencies, we estimate them to get a more useful observation.
+
+### Dataset 2: Multiallelic Site
+When a single locus in a genome has three or more observed alleles, this site is referred to be a multiallelic site, and in our research, k = 6 is taken into account specifically. If the inbreeding coefficient, f, in our observed sample is 0.05 and our sample contains 1000 individuals with an allele frequency of $p_i$ = (0.02, 0.06, 0.075, 0.085, 0.21, 0.55) for I = 1, 2,..., 6, the genotype frequencies may be simulated using equation (1). As with k = 2, the phenotypic frequencies are calculated as $n_ij = ntimes p_ij$, which corresponds to our observed data. Additionally, since this simulation often produces non-integer phenotypic frequencies, we estimate them again to get a more realistic observation.
+
+## Methodology
+### Metropolis-Hastings-within-Gibbs
+Full joint density is the following:
+$$\pi(n_{ij})=P(n_{ij}|f,p_1,\dots,p_k)\\
+=C_1\prod_{i=1}^k(p_i(f +(1-f)p_i))^{n_{ii}}\prod_{j=i+1}^k(2p_ip_j(1-f))^{n_{ij}}\tag{5}$$
+
+
+Given that this is a product of a large number of integers between 0 and 1, using the log of this joint density simplifies calculation and avoids the issue of very tiny values:
+$$log(\pi(n_{ij}))=log(P(n_{ij}|f,p_a,\dots,p_k))$$
+$$= \sum_{i=1}^kn_{ii}log(p_i(f+(1-f)p_i)+\sum_{i=1}^k\sum_{j=1+1}^kn_{ij}log(2p_ip_j)(1-f))\tag{6}$$
+The proposal function for $p_i$:
+$$p_u^t\sim Unif[max(0,p_u^{t-1}-\epsilon_p),min(p_u^{t-1}+\epsilon_p,p_u^{t-1}+p_v^{t-1}]$$
+$$p_v^t=p_u^{t-1}+p_v^{t-1}-p_u^t\tag{7}$$
+The proposal function for f:
+$$f\sim Unif[max(0,p_u^{t-1}-\epsilon_p),min(p_u^{t-1}+\epsilon_p,p_u^{t-1}+p_v^{t-1})]\tag{8}$$
+where $p_{min}$ is the minimum pi at step t, $\epsilon_f$.
+
+The main idea is to update a pair of $p_u$ and $p_v$, setting the new proposed $p^t_u + p^t_v =previous$ $p_u + p_v$ guarantees that $\sum^k_{i=1} p_i = 1$.
+
+Then, using the Metropolis-Hastings rule, we accept or reject our proposed $p_u$ and $p_v$, where the whole joint density function and proposed function are obtained from equations (5) and (7). 
+Following that, we suggest f with distribution in (8). 
+(Note that we may suggest a new f only after we accept the p.) Throughout the process, we adjust $epsilon_p$ in order to control our acceptance rate; a positive value of $epsilon_p$ is chosen to achieve reasonable acceptance rates; if $epsilon_p$ is too large, the chain will stick too much in one place and thus converge very slowly; if $epsilon_p$ is too small, the chain will make frequent but very small moves and thus converge very slowly. 
+Due to the complexity of our joint density, we deal with it by using logarithms, e.g. accept iff $log(U_n) < log(A_n)$, where $U_n\sim Unif[0,1]$ and $A_n = \left(\frac{g(f^{new},P^{new})q(f_{old},P_{old})}{g(f^{old},P^{old})q(f^{new},P^{new})}\right)$
+
+### Gibbs Sampler
+
+Rather of adopting the standard Component-wise Metropolis-Hastings method, we attempted to suggest each coordinate based on its conditional distribution with respect to all other coordinates. The conditional distributions of f, $p_1$,..., $p_k$ are constructed as follows from the complete joint distribution (5):
+$$g(f|p_1,...,p_k,{n_{ij}})=\prod_{i=1}^k[f+(1-f)p_i]^{n_{ii}}\prod_{j=i+1}^k(1-f)^{n_{ij}}\tag{9}$$
+for $\left(\frac{-p_{min}}{(1-p_{min})}\right)\le f\le 1$
+$$g(p1|f,p_2,...,p_k,{n_{ij}})=p_1(f+(1-f)p_1)^{n_{11}}(p_1(1-f))^{n_{12}}\tag{10}$$
+for $0\le p_1\le 1$
+$$g(p_2|f,p2,{n{ij}})=p_2(f+(1-f)p_2)^{n_{22}}(p_2(1-f))^{n_{12}+n_{23}}\tag{11}$$
+for $0\le p_2\le 1$
+$$g(p_3|f,p2,{n{ij}})=p_3(f+(1-f)p_3)^{n_{33}}(p_3(1-f))^{n_{34}+n_{23}}\tag{12}$$
+for $0\le p_3\le 1$
+$$g(p_4|f,p2,{n{ij}})=p_4(f+(1-f)p_4)^{n_{44}}(p_4(1-f))^{n_{34}+n_{45}}\tag{13}$$
+for $0\le p_4\le 1$
+$$g(p_5|f,p2,{n{ij}})=p_5(f+(1-f)p_5)^{n_{55}}(p_5(1-f))^{n_{56}+n_{45}}\tag{14}$$
+for $0\le p_5\le 1$
+$$g(p_6|f,p2,{n{ij}})=p_6(f+(1-f)p_6)^{n_{66}}(p_6(1-f))^{n_{56}}\tag{15}$$
+for $0\le p_6\le 1$
+
+We suggest each $p_i$ according to its conditional density using a systematic scan and normalize them as we did for the starting values to guarantee the sum equals 1. In this scenario, we always accept our proposal and then use the conditional distribution of f to update it.
+
+### Independence Sampler
+As described in the Results section, the M-H algorithm performs pretty well. As a result, we decided to test the independence sampler, a specific instance of the M-H method, to see whether it may give us a more efficient solution. 
+As previously indicated, the whole joint distribution is (5); the proposed distribution for the moving function f is as follows: 
+$$f\sim Unif(max(\frac{-p^t_{min}}{1-p^t_{min}},f-\epsilon_f),min(f+\epsilon_f,1))\tag{16}$$
+where $p_{min}$ is the minimum $p_i$ at step t, $\epsilon_f$.
+
+Due to the complexity of our joint density, which might be rather modest depending on the value, we deal with it using logarithms, e.g. accept if $log(U_n)<log(A_n), where $U_n = left(fracg(Y_n)q(X_n-1)(g(X_n-1)q(Y_n)right)$ and $A_n = left(fracg(Y_n)q(X_n-1)q As a result, the suggested states $Y_n$ are distinct from their preceding states $X_n-1$. 
+In practice, we disregard the easy scenario when k = 2 and only discuss the case where k = 6 because MCMC is more likely to be needed due to the implausibility of numeric approaches.
+
+### Other Monte Carlo methods
+Importance sampling appears to be impossible without detailed information about the sample group, as we would be unable to find the kernel of the distribution of allele frequencies and inbreeding coefficients (f,$p_1$,...,$p_k$), from which to sample. As a result, it is inefficient and makes no sense, as illustrated in figure 2. 
+Additionally, the Rejection Sampler seems to be illogical, since it is quite difficult to find an appropriate K and f(x) to constrain our joint density function, even in the simplest situation when k=2.
+
+\newpage
+# Result
+## MLE on Dataset 1
+When k equals 2, we may apply equation (4) to estimate the MLE. When simulating the data, we used the nearest integer of $n_ij$, e.g. 1 for 1.36, to obtain the first estimate; because this value is less than the exact value of $n_ij$, the estimate of f will be smaller/larger; we then obtained the second estimate festimate2 by using the next nearest integer of $n_ij + 1$, e.g. 2 for 1.36 + 1. By combining the first and second estimators, we may get a final MLE estimate with a smaller error margin than if we used simply one of them. When n = 200, the resulting estimate is around 0.05281472. Nota bene: if we do not round $n_ij$ as an integer, we may get an accurate value of 0.05.
+
+## M-H Algorithm on Dataset 1
+Table of acceptance rate by diverent values of  $\epsilon_p$.
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE}
+# PD for p_i: u,v randomly chosen from 1,...,k
+# p_u^{t} \sim Unif[max(0,p_u^{t-1}-\epsilon_p), 
+# min(p_u^{t-1}+\epsilon_p, p_u^{t-1}+p_v^{t-1})]
+# then p_v^{t}=p_u^{t-1}+p_v{t-1}-p_u{t}
+qq.p = function(x,u,v,eps.p){
+  1/(min(x[u]+eps.p, x[u]+x[v]) - max(0, x[u]-eps.p))
+}
+
+# PD for f: Unif(max(-p_{min}^t)/(1-p_{min}^t,f-\epsilon_f))
+qq.f = function(x,y,k,eps.f){
+  1/(min(x[1]+eps.f, 1) - max(-min(y[2:(k+1)])/(1-min(y[2:(k+1)])), x[1]-eps.f))
+}
+```
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE,fig1, tab.cap = "Summary table of acceptance rate by different epsilon p keeping k = 2"}
+##### MH Algorithm while k=2
+mhkis2 = function(eps = 0.05){
+  # log of the joint distribution function for k = 2
+  log.g = function(X,n11,n12,n22){
+    n11*(log(X[2])+log(X[1]+(1-X[1])*X[2])) + 
+      n12*log(2*X[2]*X[3]*(1-X[1]))+
+      n22*(log(X[3])+log(X[1]+(1-X[1])*X[3]))
+  }
+  ### data simulation
+  eps.p = eps
+  k  = 2    # alleles 
+  n  = 200  # sample size
+  f  = 0.05 # true inbreeding coef
+  # true allele f
+  p1 = 0.25 
+  p2 = 0.75
+  
+  p11 = p1*(f+(1-f)*p1)
+  p22 = p2*(f+(1-f)*p2)
+  p12 = 2*p1*p2*(1-f)
+  n12 = round(p12*n)
+  n11 = round(p11*n)
+  n22 = n-n11-n12
+  
+  #### the algo
+  # init values
+  X    = rep(0,3)
+  X[1] = runif(1)
+  a = runif(1)
+  b = runif(1)
+  
+  p1 = a/(a+b)
+  p2 = b/(a+b)
+  X[2] = p1
+  X[3] = p2 # overdispersed value
+  
+  M  =10000
+  B = 1000 # burn value
+  
+  eps.f =((k^2)*eps.p/((k-1)*(k-1-k*eps.p)))+0.0001
+  
+  thresholdaccept = 0
+  flist = rep(0,M)
+  
+  for (i in 1:M) {
+    Y = X
+    
+    r = sample(c(2,3),2) # propose p1 or p2
+    u = r[1]
+    v = r[2]
+    
+    Y[u] = runif(1,max(0,Y[u] - eps.p),min(Y[u]+eps.p,Y[u]+Y[v]))
+    Y[v] = 1-Y[u] # p1+p2 = 1 when k=2
+    
+    U  = runif(1) # for accept/reject
+    alpha = log.g(Y,n11,n12,n22) + log(qq.p(X,u,v,eps.p)) -
+      log.g(X,n11,n12,n22) - log(qq.p(Y,u,v,eps.p))
+    
+    if(log(U) < alpha){
+      X = Y
+      # now we update the f when p' is accepted
+      Z = X
+      
+      Z[1] = runif(1,max(-min(Y[2:3])/(1-min(Y[2:3])), X[1]-eps.f),min(X[1]+eps.f, 1))
+      
+      W = runif(1) # for accept/reject
+      
+      beta = log.g(Z,n11,n12,n22) + log(qq.f(X,Z,k,eps.f)) - 
+        log.g(X,n11,n12,n22) - log(qq.f(Z,X,k,eps.f))
+      
+      if(log(W)<beta){
+        X = Z
+        thresholdaccept = thresholdaccept + 1
+      }
+    }
+    flist[i] = X[1]
+  }
+  estmean = mean(flist[(B+1):M])
+  se1 =  sd(flist[(B+1):M]) / sqrt(M-B)
+  varfact = function(xxx) { 2 * sum(acf(xxx, plot=FALSE)$acf) - 1 }
+  se2 = se1 * sqrt( varfact(flist[(B+1):M]) )
+  ci = c(estmean - 1.96*se2, estmean + 1.96*se2)
+  return(list(thresholdaccept/M, estmean, ci, flist, M, B, se2))
+}
+
+# testing epsilon for the best acceptance rate
+set.seed(9999)
+epslist  = seq(0.01,0.1,0.01)
+acclist = meanlist = cilblist = ciublist= selist = rep(0,10) 
+for (i in 1:10){
+  result = mhkis2(epslist[i])
+  acclist[i]  = result[[1]]
+  meanlist[i] = result[[2]]
+  cilblist[i] = result[[3]][1]
+  ciublist[i] = result[[3]][2]
+  selist[i]   = result[[7]]
+}
+results = cbind(epslist, acclist,meanlist,cilblist,ciublist, selist)
+results = as.data.frame(results)
+colnames(results) = c("Epsilon", "Acceptance Rate", "Mean", "Lower bound of CI", 
+                       "Upper bound of CI", "Standard Error")
+results1=results%>%
+  select(1,2,6)
+results1%>%
+  knitr::kable(caption = "Acceptance rate by different epsilon p when k = 2")%>%
+  kable_styling(latex_options="HOLD_position")
+```
+
+According to the summary table 1, when $epsilon_p$ is between 0.02 and 0.05, the acceptance rates are between 0 and 1, with a relatively low standard error of 0.03 to 0.08. By setting $epsilon_p$ to 0.03, the algorithm was run for 10000 iterations with a 1000-iteration "burn-in" period, and we provide an estimate for f: $$\hat{f}=\frac{1}{(M-B)}\sum^M_{i=B+1}f_i=0.05230045$$  with a 95% confidence interval. This estimator's confidence interval is as follows: (0.04777199, 0.05682892). This confidence range encompasses our genuine theoretical value of 0.05, which is an excellent result.
+\newpage
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE,fig2, fig.cap = "MK Chain converge compare to the true value in dataset 1"}
+# when epsilon = 0.02 or 0.03 the algo seems to perform better
+set.seed(9999)
+result = mhkis2(0.03)
+flist = result[[4]]
+M = result[[5]]
+B = result[[6]]
+plot(flist[1:M], type = "l")
+abline(h=0.05, col="red")
+
+# mean
+estmean = mean(flist[(B+1):M])
+# 95$ CI
+se2 = result[[7]]
+ci = c(estmean - 1.96*se2, estmean + 1.96*se2)
+```
+
+From the Figure 2 we see that the chain has a high degree of mixing, a low level of uncertainty and that it converges rapidly and remains quite near to the real value of f. (around 0.05).
+
+\newpage
+## M-H Algorithm on Dataset 2
+
+Table of acceptance rate for different values of $\epsilon_p$.
+Here $\epsilon_p$ = 0.006 or 0.014, the acceptance rates are far from 0 and 1, and low standard error from 0.01 to 0.02. Holding $\epsilon_p$ = 0.01, the algorithm was performed for 10000 iterations with a length of 1000 "burn-in”, and we give our estimate for f:
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE,fig3, tab.cap = "A summary table of acceptance rate by different epsilon p when k = 6"}
+############  MH for k=6
+mhkis6 = function(eps = 0.05){
+  
+  log.g = function(X,N){
+    dens = 0
+    k = length(X) - 1
+    for (i in 1:k) {
+      if (i < k){
+        for (j in (i+1):k){
+          dens = dens + N[i,j]*log(2*X[i+1]*X[j+1]*(1-X[1]))
+        }
+      }
+      dens = dens + N[i,i]*log(X[i+1]*(X[1]+(1-X[1])*X[i+1]))
+    }
+    return(dens)
+  }
+  # data
+  eps.p = eps
+  n = 1000 # sample sizes
+  k = 6    # alleles
+  f = 0.05 # true inbreeding coefficient
+  # allele frequencies k = 6
+  k6 = c(0.02,0.06,0.075,0.085,0.21,0.55)
+  P = matrix(nrow = 6, ncol = 6) 
+  for (i in 1:6){
+    for (j in 1:6){
+      if (i==j){
+        P[i,j] = k6[i]*(f+(1-f)*k6[i])
+      }
+      else {
+        P[i,j] = 2*k6[i]*k6[j]*(1-f)
+      }
+    }
+  }
+
+  N = round(P*n)
+
+  N[6,6] = 316
+
+  X      = rep(0,7)
+  X[1]   = runif(1)
+  ps     = runif(6)
+  X[2:7] = ps/sum(ps) 
+  
+  M = 10000
+  B = 1000 
+  
+  eps.f =((k^2)*eps.p/((k-1)*(k-1-k*eps.p)))+0.0001
+  
+  thresholdaccept = 0
+  flist = rep(0,M)
+  
+  for (m in 1:M) {
+    Y = X
+    
+    r = sample(c(2,3,4,5,6,7),2)
+    u = r[1]
+    v = r[2]
+    
+    Y[u] = runif(1,max(0,Y[u] - eps.p),min(Y[u]+eps.p,Y[u]+Y[v]))
+    Y[v] = X[u] + X[v] - Y[u]
+    
+    U  = runif(1) 
+    alpha = log.g(Y,N) + log(qq.p(X,u,v,eps.p)) -
+      log.g(X,N) - log(qq.p(Y,u,v,eps.p))
+    
+    if(log(U) < alpha){
+      X = Y
+   
+      Z = X
+      
+      Z[1] = runif(1,max(-min(Y[2:7])/(1-min(Y[2:7])), X[1]-eps.f),min(X[1]+eps.f, 1))
+      
+      W = runif(1) 
+      
+      beta = log.g(Z,N) + log(qq.f(X,Z,k,eps.f)) - 
+        log.g(X,N) - log(qq.f(Z,X,k,eps.f))
+      
+      if(log(W)<beta){
+        X = Z
+        thresholdaccept = thresholdaccept + 1
+      }
+    }
+    flist[m] = X[1]
+  }
+  estmean = mean(flist[(B+1):M])
+  se1 =  sd(flist[(B+1):M]) / sqrt(M-B)
+  varfact = function(xxx) { 2 * sum(acf(xxx, plot=FALSE)$acf) - 1 }
+  se2 = se1 * sqrt( varfact(flist[(B+1):M]) )
+  ci = c(estmean - 1.96*se2, estmean + 1.96*se2)
+  return(list(thresholdaccept/M, estmean, ci, flist, M, B, se2))
+}
+
+# testing epsilon for best acceptance rate
+set.seed(9999)
+epslist = c(seq(0.001,0.01,0.001), seq(0.011,0.02,0.001))
+acclist = meanlist = cilblist = ciublist = selist = rep(0,20)
+for (i in 1:20){
+  tryCatch({
+    result = mhkis6(epslist[i])
+    acclist[i]  = result[[1]]
+    meanlist[i] = result[[2]]
+    cilblist[i] = result[[3]][1]
+    ciublist[i] = result[[3]][2]
+    selist[i]   = result[[7]]
+  }, error=function(e){})
+}
+results = cbind(epslist, acclist,meanlist,cilblist,ciublist,selist)
+results = as.data.frame(results)
+colnames(results) = c("Epsilon", "Acceptance Rate", "Mean", "Lower bound of CI", 
+                       "Upper bound of CI", "Standard Error")
+results2=results%>%
+  select(1,2,6)
+results2%>%
+  knitr::kable(caption = "Acceptance rate by different epsilon p when k = 6")%>%
+  kable_styling(latex_options="HOLD_position")
+```
+
+$$\hat{f}=\frac{1}{(M-B)}\sum^M_{i=B+1}f_i=0.05072752$$ and a 95% CI for estimator: (0.04837185, 0.05308320). Here: Figure 3 ,this CI covers our true theoretical value 0.05.
+
+\newpage
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE, fig4, fig.cap = "MK converges compares to the true value in dataset 2"}
+
+set.seed(9999)
+result = mhkis6(0.01)
+flist = result[[4]]
+M = result[[5]]
+plot(flist[1:M], type = "l")
+abline(h=0.05,col="red")
+# mean
+estmean = mean(flist[(B+1):M])
+# 95$ CI
+se2 = result[[7]]
+ci = c(estmean - 1.96*se2, estmean + 1.96*se2)
+```
+
+According to Figure 4 MK in 1000 iterations, converges to true f value.
+
+\newpage
+## Gibbs Sampler
+$$\hat{f}=\frac{1}{(M-B)}\sum^M_{i=B+1}f_i=0.003558$$
+
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE,include=FALSE}
+
+n = 1000 # sample sizes
+k = 6    # alleles
+f = 0.05 # true inbreeding coefficient
+k6 = c(0.02,0.06,0.075,0.085,0.21,0.55)
+P = matrix(nrow = 6, ncol = 6) 
+for (i in 1:6){
+  for (j in 1:6){
+    if (i==j){
+      P[i,j] = k6[i]*(f+(1-f)*k6[i])
+    }
+    else {
+      P[i,j] = 2*k6[i]*k6[j]*(1-f)
+    }
+  }
+}
+N = round(P*n)
+N[6,6] = 316
+
+#### the algo
+# init values
+set.seed(9999)
+X      = rep(0,7)
+X[1]   = runif(1)
+ps     = runif(6)
+X[2:7] = ps/sum(ps)
+
+M = 10000
+B = 1000 # burn value
+flist=p1list=p2list=p3list=p4list=p5list=p6list=rep(0,M)
+
+set.seed(9999)
+# systematic-scan
+for (m in 1:M) {
+  Y = X
+
+  pdfp1 = function(x){
+    if(x < 0 || x > 1)
+      return(0)
+    else
+      return(x*(X[1]+(1-X[1])*x)^N[1,1]*(x*(1-X[1]))^N[1,2])
+  }
+  c1 = integrate(pdfp1,0,1)[[1]]
+  if (c1>0){
+    cdfp1 = function(x,u){
+      return(integrate(pdfp1,0,x)[[1]]/c1 - u);
+    }
+    Y[2] = uniroot(cdfp1, c(0,1), tol = 0.0001, u = runif(1))$root
+  } else Y[2] = 1e-20
+
+  
+  pdfp2 = function(x){
+    if(x < 0 || x > 1)
+      return(0)
+    else
+      return(x*(X[1]+(1-X[1])*x)^N[2,2]*(x*(1-X[1]))^(N[1,2]+N[2,3]))
+  }
+  c2 = integrate(pdfp2,0,1)[[1]]
+  if (c2>0){
+    cdfp2 = function(x,u){
+      return(integrate(pdfp2,0,x)[[1]]/c2 - u);
+    }
+    Y[3] = uniroot(cdfp2, c(0,1), tol = 0.0001, u = runif(1))$root
+  } else Y[3] = 1e-20
+
+  
+  pdfp3 = function(x){
+    if(x < 0 || x > 1)
+      return(0)
+    else
+      return(x*(X[1]+(1-X[1])*x)^N[3,3]*(x*(1-X[1]))^(N[3,4]+N[2,3]))
+  }
+  c3 = integrate(pdfp3,0,1)[[1]]
+  if (c3>0){
+    cdfp3 = function(x,u){
+      return(integrate(pdfp3,0,x)[[1]]/c3 - u);
+    }
+    Y[4] = uniroot(cdfp3, c(0,1), tol = 0.0001, u = runif(1))$root
+  } else Y[4] = 1e-20
+  
+  
+  pdfp4 = function(x){
+    if(x < 0 || x > 1)
+      return(0)
+    else
+      return(x*(X[1]+(1-X[1])*x)^N[4,4]*(x*(1-X[1]))^(N[3,4]+N[4,5]))
+  }
+  c4 = integrate(pdfp4,0,1)[[1]]
+  if (c4>0){
+    cdfp4 = function(x,u){
+      return(integrate(pdfp4,0,x)[[1]]/c4 - u);
+    }
+    Y[5] = uniroot(cdfp4, c(0,1), tol = 0.0001, u = runif(1))$root
+  } else Y[5] = 1e-20
+  
+  
+  pdfp5 = function(x){
+    if(x < 0 || x > 1)
+      return(0)
+    else
+      return(x*(X[1]+(1-X[1])*x)^N[5,5]*(x*(1-X[1]))^(N[5,6]+N[4,5]))
+  }
+  c5 = integrate(pdfp5,0,1)[[1]]
+  if (c5>0){
+    cdfp5 = function(x,u){
+      return(integrate(pdfp5,0,x)[[1]]/c5 - u);
+    }
+    Y[6] = uniroot(cdfp5, c(0,1), tol = 0.0001, u = runif(1))$root
+  } else Y[6] = 1e-20
+
+  
+  pdfp6 = function(x){
+    if(x < 0 || x > 1)
+      return(0)
+    else
+      return(x*(X[1]+(1-X[1])*x)^N[6,6]*(x*(1-X[1]))^N[5,6])
+  }
+  c6 = integrate(pdfp6,0,1)[[1]]
+  if (c6>0){
+    cdfp6 = function(x,u){
+      return(integrate(pdfp6,0,x)[[1]]/c6 - u);
+    }
+    Y[7] = uniroot(cdfp6, c(0,1), tol = 0.0001, u = runif(1))$root
+  } else Y[7] = 1e-20
+
+
+  psum = sum(Y[2:7])
+  Y[2:7] = Y[2:7]/psum
+  X = Y
+  
+  
+  #update f 
+  Z = X
+
+  pdff = function(x){
+    dens = 1
+    if(x < -min(X[2:7])/(1-min(X[2:7])) || x > 1)
+      return(0)
+    else
+      for (i in 1:6){
+        if (i < k){
+          for (j in (i+1):6) {
+            dens = dens*(x+(1-x)*X[i+1])^N[i,i]*(1-x)^N[i,j]
+          }
+        }
+      }
+    dens
+  }
+  cf = integrate(pdff,-min(X[2:7])/(1-min(X[2:7])),1)[[1]]
+  cdff = function(x,u){
+    return(integrate(pdff,-min(X[2:7])/(1-min(X[2:7])),x)[[1]]/cf - u);
+  }
+  Z[1] = uniroot(cdff, c(-min(X[2:7])/(1-min(X[2:7])),1), tol = 0.0001, u = runif(1))$root
+  X = Z
+  
+  p1list[m] = X[2]; p2list[m] = X[3]
+  p3list[m] = X[4]; p4list[m] = X[5]
+  p5list[m] = X[6]; p6list[m] = X[7]
+  flist[m]  = X[1]
+}
+(estmean = mean(flist[(B+1):M]))
+
+
+```
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE, fig5, fig.cap = "The chain converges compares to the true value under Gibbs sampler"}
+plot(flist[seq(1,10000,10)],type="l")
+```
+
+Compared with Figure 5 it is again, that the MK converges to 0.03, performing not as close to our true value of 0.05. Additionally, we can see that it has a significant degree of uncertainty, which is attributable mostly to the fact that the coefficient, f, is associated with our $p_i$. When we used the conditional distribution to create $p_i$, we encountered a number of issues, which will be described in further depth in the discussion section.
+
+\newpage
+## Independence Sampler
+The outcome is unsatisfactory since the chain does not genuinely converge, despite the fact that it briefly converges to our true value at the beginning. Even tuning the eps.p makes no difference.
+$$\hat{f}=\frac{1}{(M-B)}\sum^M_{i=B+1}f_i=0.02897391$$
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE, fig6, fig.cap = "MK converges to true value under independence sampler"}
+# PD for f: Unif(max(-p_{min}^t)/(1-p_{min}^t,f-\epsilon_f))
+qq.f = function(x,y,k,eps.f){
+  1/(min(x[1]+eps.f, 1) - max(-min(y[2:(k+1)])/(1-min(y[2:(k+1)])), x[1]-eps.f))
+}
+
+eps.p = eps = 0.05
+log.g = function(X,N){
+  dens = 0
+  k = length(X) - 1
+  for (i in 1:k) {
+    if (i < k){
+      for (j in (i+1):k){
+        dens = dens + N[i,j]*log(2*X[i+1]*X[j+1]*(1-X[1]))
+      }
+    }
+    dens = dens + N[i,i]*log(X[i+1]*(X[1]+(1-X[1])*X[i+1]))
+  }
+  return(dens)
+}
+
+# data simulation
+n = 1000 # sample sizes
+k = 6    # alleles
+f = 0.05 # true inbreeding coefficient
+
+k6 = c(0.02,0.06,0.075,0.085,0.21,0.55)
+
+P = matrix(nrow = 6, ncol = 6) 
+for (i in 1:6){
+  for (j in 1:6){
+    if (i==j){
+      P[i,j] = k6[i]*(f+(1-f)*k6[i])
+    }
+    else {
+      P[i,j] = 2*k6[i]*k6[j]*(1-f)
+    }
+  }
+}
+
+N = round(P*n)
+
+N[6,6] = 316
+
+#algo
+# init values
+X      = rep(0,7)
+X[1]   = runif(1)
+ps     = runif(6)
+X[2:7] = ps/sum(ps) 
+
+M = 10000
+B = 1000 
+eps.f =((k^2)*eps.p/((k-1)*(k-1-k*eps.p)))+0.0001
+
+thresholdaccept = 0
+flist = rep(0,M)
+
+for (i in 1:M) {
+  Y = X
+  X[1] = runif(1,max(-min(Y[2:7])/(1-min(Y[2:7])), X[1]-eps.f),min(X[1]+eps.f, 1))
+  
+  Z = rep(0,7)
+  Z[1] = runif(1)
+  pz = runif(6)
+  Z[2:7] = pz/sum(pz)
+  W = Z
+  Z[1] = runif(1,max(-min(W[2:7])/(1-min(W[2:7])), Z[1]-eps.f),min(Z[1]+eps.f, 1))
+  
+  U  = runif(1) # for accept/reject
+  alpha = log.g(Z,N) + log(qq.f(X,Y,k,eps.f)) -
+    log.g(X,N) - log(qq.f(Z,W,k,eps.p))
+  
+  if(log(U) < alpha){
+    X = Z
+    thresholdaccept = thresholdaccept + 1
+  }
+  
+  flist[i] = X[1]
+}
+estmean = mean(flist[(B+1):M])
+se1 =  sd(flist[(B+1):M]) / sqrt(M-B)
+varfact = function(xxx) { 2 * sum(acf(xxx, plot=FALSE)$acf) - 1 }
+se2 = se1 * sqrt( varfact(flist[(B+1):M]) )
+ci = c(estmean - 1.96*se2, estmean + 1.96*se2)
+
+plot(flist, type = 'l')
+abline(h=0.05, col="red")
+```
+
+By examining the graph Figure 6 and the results, we can observe that Independence Sampler performs badly, converges far from our target (red line – 0.05), and has a very high degree of uncertainty. 
+The explanation for this failure might be that although $Y_n$ are unique and independent of $X_n-1$, they are really associated when the formula is examined (1). We know that since people's genes are all associated in the genetic field, isolating a few genotypes would undoubtedly affect the inbreeding coefficient, which may be the primary reason for this algorithm's failure.
+
+\newpage
+## Importance Sampling
+$$\hat{f}=0.5205245$$
+
+
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE,fig7, fig.cap = "MK converges to true value under importance sampling"}
+# importance sampling
+
+n = 200
+k = 2
+h = function(f){
+  return(f)
+}
+
+g = function(X){
+  X[4]*(log(X[2])+log(X[1]+(1-X[1])*X[2])) + 
+    X[5]*log(2*X[2]*X[3]*(1-X[1]))+X[6]*(log(X[3])+log(X[1]+(1-X[1])*X[3]))
+}
+
+f_a = function(X){
+  return(runif(1,max(-min(X[2:3])/(1-min(X[2:3])), X[1]-eps.f),min(X[1]+eps.f, 1)))
+  
+}
+eps.p = 0.02
+eps.f =((k^2)*eps.p/((k-1)*(k-1-k*eps.p)))+0.0001
+f = runif(10000)
+a = runif(10000)
+b = runif(10000)
+
+p1 = a/(a+b)
+p2 = b/(a+b)
+p11 = p1*(f+(1-f)*p1)
+p22 = p2*(f+(1-f)*p2)
+p12 = 2*p1*p2*(1-f) 
+n12 = round(p12*n)
+n11 = round(p11*n)
+n22 = round(p22*n)
+X  = c(f,p1,p2,n11,n12,n22)
+
+numlist = g(X)+log(f) - log(f_a(X))
+denomlist = g(X) - log(f_a(X))
+
+estimate_f_list = exp(numlist)/exp(denomlist)
+plot(estimate_f_list[seq(1,10000,10)],type = 'l')
+abline(h=0.05, col="red")
+estimate_f = mean(exp(numlist))/mean(exp(denomlist))
+```
+
+According to the graph Figure 7, the Importance Sampling algorithm performs fairly poorly even in the simplest scenario where k = 2. As indicated in Section 3.4, determining the distribution of f is extremely difficult, which is the primary explanation for these findings. Additionally, we discovered that although the Importance sampler could be utilised for certain basic, low-dimensional functions, it was hard to build for complex, high-dimensional functions.
+
+\newpage
+# Discussion
+## Conclusions in MCMC method
+The most evident benefit of the MCMC method described here over more traditional approaches is that findings are graphically depicted as posterior density curves and hence easily interpretable. Additionally, the strategy allows for the incorporation of background data, which reduces the quantity of direct data necessary. The technique is adaptable and simple to apply. Apart from being practical, the strategy is strongly supported by statistical theory: there are good reasons to believe that uncertainty about an unknown parameter should be expressed by its probability distribution wherever possible (Smith & Bernardo, 1994). 
+
+Wide ranges of possible values frequently occur, especially when there are few distinguishable alleles and/or the sample size is small. The MCMC approach provides a clear and visible representation of the resultant uncertainty, which makes it superior to point estimation methods. 
+
+Due to the method's likelihood-based foundation, it is extremely adaptable, allowing for examination of the inbreeding model's validity. If the model does not appear to be logical, one can utilize the posteriors of the fixation indices fit to quantify the sample's divergence from HW.
+
+Due to the fact that the conditional distributions for each parameter are quite distinct, we must build them from their density function for the Gibbs sampler. Initially, we considered using an MCMC method to generate the sample, but later decided to generate a sample each time by looking for the root of $U_n = F (x)$, where $Un\sim Unif [0,1]$ is the cumulative distribution for the parameters conditional distribution and $F (x)$ is the cumulative distribution for the parameters conditional distribution, which is an inverse CDF approach. 
+
+However, since the conditional distribution is expressed as a product of the product and power of the number of observations, it might become rather tiny. To prevent the denominator from being zero while updating f, we set the parameters to $1020$ if the computer recognizes it as a zero, particularly for $p_4,..., p_6$. 
+
+Despite this, the values of the aforementioned parameters regularly approach zero, leading f to approach 1 repeatedly, as seen in the graph. Unfortunately, we were unable to address this issue by taking the log of the conditional distribution, since the scale of the CDF varies as the density increases, making finding roots for $U_n =log(F(x))$ very difficult and incorrect. 
+Additionally, we used the R programme distr to produce random samples from the conditional distribution. However, when the function's power is large (e.g. > 4), it takes a very long time to generate the density as a distribution. 
+
+## Weaknesses and next steps
+In general, the MCMC algorithm that we utilize, Metropolis-Hastings-within-Gibbs, performed the best in both low- and high-dimension cases, giving us a reasonably accurate estimate of the real value. The proposed distribution, on the other hand, needs previous knowledge of the parameters. 
+
+All other algorithms, on the other hand, were unsatisfactory. Independent Sampler's estimate was significantly different from the genuine value, resulting in a substantial standard error. On the other hand, both the Importance Sampling and Rejection Sampler fared poorly, owing to the difficulty of obtaining K and $f(x)$. 
+Gibbs Sampler gave a more accurate approximation of the real value than previous inferior MCMC methods, but with a large degree of uncertainty. Nonetheless, as long as we have good conditional distribution, the Gibbs sampler is a highly strong and efficient MCMC technique.
+
+
+```{r, message=FALSE, echo=FALSE,warning=FALSE,include=FALSE}
+
+#Maximum likelihood estimation procdure:
+
+# first lets define the simplest form when k = 2, 
+# compare accuracy by setting f = 0.05
+# MLE numerical value 
+# and the MCMC methods value 
+# after all, determine if Monte carlo methods was good..
+
+# We need to know that k[1] is denote as p1, 
+# which is the frequency of allele A1
+k2 = c(0.25,0.75) # sum is 1
+f = 0.05
+n = 200
+#pij = 2*pi*pj*(1-f)
+#pii = pi*(f+(1-f)*pi)
+p1 = k2[1]
+p2 = k2[2]
+p11 = p1*(f+(1-f)*p1)
+p22 = p2*(f+(1-f)*p2)
+p12 = 2*p1*p2*(1-f)
+
+# take notice that nij is the number of individuals having the genotype AiAj. They must be integers, which is why we need the method for removing the residue and increasing by one and then take the average to get the estimate. we see that if they are not rounded, we will get the precise 0.05 we need, but this is only an example.
+
+n12 = round(p12*n)+1
+n11 = round(p11*n)+1
+n22 = round(p22*n)+1
+
+
+festimate = 1-(2*n12*n)/((2*n11+n12)*(n12+2*n22))
+
+festimate1 = festimate
+
+n12 = round(p12*n)
+n11 = round(p11*n)
+n22 = round(p22*n)
+
+festimate = 1-(2*n12*n)/((2*n11+n12)*(n12+2*n22))
+
+festimate2 = festimate
+
+festimate_final = (festimate1+festimate2)/2
+festimate_final
+# The reason we retest the approach used in the study is because, even if we apply the same formula, the way we deal with the remainder will have a significant effect on the estimate, which is why, even when we use the MCMC methods, there may still be some standard error.
+```
+
+\newpage
+# Reference
+
+Ayres, K. L., &amp; Balding, D. J. (1998). Measuring departures from Hardy–Weinberg: A Markov chain Monte Carlo method for estimating the inbreeding coefficient. Heredity, 80(6), 769–777. https://doi.org/10.1046/j.1365-2540.1998.00360.x 
+
+Crow, J. F., &amp; Kimura, M. (2017). An introduction to population genetics theory. Scientific Publisher (India). 
+
+Hardy, G. H., &amp; Galton, F. (1908). Mendelian proportions in a mixed population. 
+
+Hill, W. G., Babiker, H. A., Ranford-Cartwright, L. C., &amp; Walliker, D. (1995). Estimation of inbreeding coefficients from genotypic data on multiple alleles, and application to estimation of clonality in malaria parasites. Genetical Research, 65(1), 53–61. https://doi.org/10.1017/s0016672300033000 
+
+Malecot, G. (1969). Measuring departures from Hardy–Weinberg: A Markov chain Monte Carlo method for estimating the inbreeding coefficient. The Mathematics of Heredity. https://doi.org/10.1046/j.1365-2540.1998.00360.x 
+
+NEI, M., &amp; CHESSER, R. K. (1983). Estimation of fixation indices and gene diversities. Annals of Human Genetics, 47(3), 253–259. https://doi.org/10.1111/j.1469-1809.1983.tb00993.x 
+
+R Core Team (2020). R: A language and environment for statistical computing. R Foundation for Statistical Computing, Vienna, Austria. URL: https://www.R-project.org/.
+
+Robertson, A., &amp; Hill, W. G. (1984). Deviations from Hardy-Weinberg proportions: Sampling variances and use in estimation of inbreeding coefficients. Genetics, 107(4), 703–718. https://doi.org/10.1093/genetics/107.4.703 
+
+Weir, B. S. (1996). Genetic Data Analysis II - Sinauer Associates. Retrieved April 28, 2022, from https://www.sinauer.com/media/wysiwyg/tocs/WEIR2_TOC.pdf 
+
+Wickham, Hadley, Mara Averick, Jennifer Bryan, Winston Chang, Lucy D’Agostino McGowan, Romain François, Garrett Grolemund, et al. 2019. “Welcome to the tidyverse.” Journal of Open Source Software 4(43): 1686. https://doi.org/10.21105/joss.01686.
+
+Wickham, Hadley. (2016). Ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York. https://ggplot2.tidyverse.org.
+
+Zhu, Hao. (2021). KableExtra: Construct Complex Table with ’Kable’ and Pipe Syntax
