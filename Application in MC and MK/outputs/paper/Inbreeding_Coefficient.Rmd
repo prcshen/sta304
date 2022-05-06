@@ -1,4 +1,5 @@
 Set GIT_COMMITTER_DATE="Wed Sep 23 9:40 2015 +0200" git commit --amend --date "Wed Sep 23 9:40 2015 +0200"
+git rebase --continue
 
 ---
 
